@@ -1,18 +1,38 @@
 #!/usr/bin/env python
 #
-# mksite v0.0.1
-# Ross Nelson, pretendamazing.org
+# mksite v0.0.2
+# Copyright (C) 2010 Ross Nelson
+# http://github.com/rnelson/slicehost-mksite
 
 from datetime import datetime
 from optparse import OptionParser
+from template import Template
+from template.util import TemplateException
 import ConfigParser
 import grp
 import os
 import pwd
+import re
 import subprocess
-import sys
 
-DEFAULTCONF = { 'confdir' : '/etc/apache2/sites-available', 'siteroot' : '/srv', 'user' : pwd.getpwnam(os.environ['USER'])[0], 'group' : grp.getgrgid(pwd.getpwnam(os.environ['USER'])[3])[0], 'gperms' : '755', 'lperms' : '777', 'pperms' : '2750' }
+
+MKSITE = {
+	'name' : 'mksite',
+	'version' : '0.0.2',
+	'author' : 'Ross Nelson',
+	'url' : 'http://github.com/rnelson/slicehost-mksite',
+	'copyright' : 'Copyright (C) 2010 Ross Nelson'
+}
+
+DEFAULTCONF = {
+	'confdir' : '/etc/apache2/sites-available',
+	'templates' : '/etc/mksite/templates',
+	'defaulttemplate' : 'standard',
+	'siteroot' : '/srv',
+	'user' : pwd.getpwnam(os.environ['USER'])[0],
+	'group' : grp.getgrgid(pwd.getpwnam(os.environ['USER'])[3])[0]
+}
+
 
 def parseConfig(configFile):
 	"""Parses the configuration file
@@ -20,12 +40,10 @@ def parseConfig(configFile):
 	Example configuration:
 		[main]
 		confdir=/etc/apache2/sites-available
+		templates=/etc/mksite/templates
 		siteroot=/srv
 		user=apache
 		group=nobody
-		gperms=755
-		lperms=777
-		pperms=2750
 	"""
 	
 	# Make sure the configuration file exists
@@ -33,21 +51,21 @@ def parseConfig(configFile):
 		print('warning: configuration file ' + configFile + ' does not exist')
 	
 	# Open the config file
-	config = ConfigParser.ConfigParser()
-	config.read(configFile)
+	ini = ConfigParser.ConfigParser()
+	ini.read(configFile)
 	
 	# Get the values
-	confdir  = getConfigValue(config, 'main', 'confdir',  DEFAULTCONF['confdir'])
-	siteroot = getConfigValue(config, 'main', 'siteroot', DEFAULTCONF['siteroot'])
-	user     = getConfigValue(config, 'main', 'user',     DEFAULTCONF['user'])
-	group    = getConfigValue(config, 'main', 'group',    DEFAULTCONF['group'])
-	gperms   = getConfigValue(config, 'main', 'gperms',   DEFAULTCONF['gperms'])
-	lperms   = getConfigValue(config, 'main', 'lperms',   DEFAULTCONF['lperms'])
-	pperms   = getConfigValue(config, 'main', 'pperms',   DEFAULTCONF['pperms'])
+	confdir   = getConfigValue(ini, 'main', 'confdir',         DEFAULTCONF['confdir'])
+	tpls      = getConfigValue(ini, 'main', 'templates',       DEFAULTCONF['templates'])
+	deftpl    = getConfigValue(ini, 'main', 'defaulttemplate', DEFAULTCONF['defaulttemplate'])
+	siteroot  = getConfigValue(ini, 'main', 'siteroot',        DEFAULTCONF['siteroot'])
+	user      = getConfigValue(ini, 'main', 'user',            DEFAULTCONF['user'])
+	group     = getConfigValue(ini, 'main', 'group',           DEFAULTCONF['group'])
 	
 	# Create and return a dictionary with all of the settings
-	settings = { 'confdir' : confdir, 'siteroot' : siteroot, 'user' : user, 'group' : group, 'gperms' : gperms, 'lperms' : lperms, 'pperms' : pperms }
+	settings = { 'confdir' : confdir, 'templates' : tpls, 'defaulttemplate' : deftpl, 'siteroot' : siteroot, 'user' : user, 'group' : group }
 	return settings
+
 
 def getConfigValue(config, section, name, default=''):
 	"""Gets a value from the configuration. If not found, returns the default"""
@@ -59,132 +77,223 @@ def getConfigValue(config, section, name, default=''):
 	
 	return val
 
-def writeVhost(settings, domain):
+
+def getTemplateValues(settings, domain, templateName):
+	"""Creates and returns a list with values for the template, either defaults or user-specified values"""
+	
+	# Parse the template configuration file
+	tplConfig = ConfigParser.ConfigParser()
+	tplConfig.read(os.path.join(os.path.join(settings['templates'], templateName), templateName + '.conf'))
+	
+	
+	# Get the template information
+	tpl = {
+		'name' : tplConfig.get('template', 'name'),
+		'author' : tplConfig.get('template', 'author'),
+		'license' : tplConfig.get('template', 'license')
+	}
+	
+	
+	# Get all of the variables that we need and set default values
+	variableSection = tplConfig.items('variables')
+	variables = {}
+	variableDescriptions = {}
+	
+	# Fill in default values (or '' if none given)
+	variables['domain'] = domain
+	for variable in variableSection:
+		name = variable[0]
+		desc = variable[1]
+		val  = ''
+		
+		try:
+			variables[name] = tplConfig.get('defaults', name)
+		except:
+			variables[name] = ''
+			
+		variableDescriptions[name] = variable[1]
+	
+	
+	# Find out what variables we're supposed to ask for
+	ask = tplConfig.get('template', 'ask').strip().split()
+	
+	
+	# Prompt the user for anything that the template wanted us to ask
+	# for or that we don't have a value for
+	values = {}
+	for variable in variables:
+		# Grab the description and default value
+		default = variables[variable]
+		
+		# Find out if the item is in ask
+		varInAsk = False  # next((n for n in ask if n == name), None)
+		for v in ask:
+			if v.strip() == variable.strip():
+				varInAsk = True
+		
+		if varInAsk or len(default) < 1:
+			# Set up our initial value
+			value = ''
+			if not varInAsk:
+				value = default
+			
+			# Prompt the user
+			while len(value) < 1:
+				value = str(raw_input(variableDescriptions[variable] + ' [' + default + ']: '))
+				
+				if len(value) == 0 and len(default) > 0:
+					value = default
+			
+			values[variable] = value
+		else:
+			values[variable] = default
+	
+	
+	# Fill in software-defined variables
+	values['timestamp'] = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+	values['creator'] = MKSITE['name'] + ' ' + MKSITE['version']
+	values['templatename'] = tpl['name']
+	values['templateauthor'] = tpl['author']
+	values['templatelicense'] = tpl['license']
+	values['mksiteuser'] = config['user']
+	values['mksitegroup'] = config['group']
+	values['mksiteuid'] = pwd.getpwnam(values['mksiteuser'])[2]
+	values['mksitegid'] = grp.getgrnam(values['mksitegroup'])[2]
+	
+	return values
+	os._exit(1)
+
+
+def writeVhost(settings, domain, templateName, values):
 	"""Writes a site's vhost configuration file"""
 	
-	# Variables
-	curtime = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+	# Open the file
 	conf = str(os.path.join(settings['confdir'], domain))
-	site = str(os.path.join(settings['siteroot'], domain))
-	pubdir = str(os.path.join(site, 'public'))
-	logdir = str(os.path.join(site, 'logs'))
-	newline = '\n'
+	outFile = open(conf, 'w')
 	
-	# Open the configuration file
-	file = open(conf, 'w')
 	
-	# Write a little informational header
-	file.write('# Domain:    ' + domain + newline)
-	file.write('# Public:    ' + pubdir + newline)
-	file.write('# Created:   ' + curtime + newline)
-	file.write('' + newline)
+	# Write the configuration
+	t = Template()
+	try:
+		tplDir = os.path.join(settings['templates'], templateName)
+		templateFilename = os.path.join(tplDir, templateName + '.tpl')
+		inFile  = open(templateFilename, 'r')
+		source = inFile.read()
+		
+		# While there are variables left unprocessed, process the string
+		expression = r'\[\%.+\%\]'
+		while re.search(expression, source) != None:
+			source = t.processString(source, values)
+		
+		# Write what we have
+		outFile.write(source)
+	except TemplateException, e:
+		print "ERROR: %s" % e
 	
-	# Config!
-	file.write('<VirtualHost *:80>' + newline)
-	file.write('  # Admin email, server name, and any aliases' + newline)
-	file.write('  ServerAdmin webmaster@' + domain + newline)
-	file.write('  ServerName ' + domain + newline)
-	file.write('  ServerAlias www.' + domain + newline)
-	file.write('  ' + newline)
-	file.write('  # Hide information about the server software' + newline)
-	file.write('  ServerSignature Off' + newline)
-	file.write('  ' + newline)
-	file.write('  # Index file and document root settings, telling it where' + newline)
-	file.write('  # the site is located and what files to use for the index' + newline)
-	file.write('  DirectoryIndex index.php index.xhtml index.htm index.html' + newline)
-	file.write('  DocumentRoot ' + pubdir + newline)
-	file.write('  ' + newline)
-	file.write('  # Logging' + newline)
-	file.write('  LogLevel warn' + newline)
-	file.write('  ErrorLog ' + str(os.path.join(logdir, 'error.log')) + newline)
-	file.write('  CustomLog ' + str(os.path.join(logdir, 'access.log')) + ' combined' + newline)
-	file.write('  ' + newline)
-	file.write('  # Public directory settings' + newline)
-	file.write('  <Directory ' + pubdir + '>' + newline)
-	file.write('    Options -Indexes +Includes ExecCGI FollowSymLinks' + newline)
-	file.write('    ' + newline)
-	file.write('    AddHandler fcgid-script .php' + newline)
-	file.write('    FCGIWrapper /usr/lib/cgi-bin/php5 .php' + newline)
-	file.write('  </Directory>' + newline)
-	file.write('  ' + newline)
-	file.write('  # CGI settings' + newline)
-	file.write('  ScriptAlias /cgi-bin/ ' + str(os.path.join(site, 'cgi-bin')) + '/' + newline)
-	file.write('  <Location /cgi-bin>' + newline)
-	file.write('    Options +ExecCGI' + newline)
-	file.write('  </Location>' + newline)
-	file.write('</VirtualHost>' + newline)
 	
 	# Cleanup
-	file.close()
+	outFile.close()
 
-def makeDirectories(settings, domain):
+
+def makeDirectories(settings, domain, templateName, values):
 	"""Creates the directories for the web site"""
 	
-	# Variables
-	site = os.path.join(settings['siteroot'], domain)
-	cgidir = os.path.join(site, 'cgi-bin')
-	logdir = os.path.join(site, 'logs')
-	prvdir = os.path.join(site, 'private')
-	pubdir = os.path.join(site, 'public')
-	
-	# os.chown() requires the uid and gid rather than name, so grab those
-	uid = pwd.getpwnam(settings['user'])[2]
-	gid = grp.getgrnam(settings['group'])[2]
-	
-	if not os.path.exists(settings['siteroot']):
-		print('error: the site root, ' + settings['siteroot'] + ' does not exist')
-		os._exit(-1)
-	
-	makeDirectory(site, settings['gperms'], uid, gid)
-	makeDirectory(cgidir, settings['gperms'], uid, gid)
-	makeDirectory(logdir, settings['lperms'], uid, gid)
-	makeDirectory(prvdir, '700', uid)
-	makeDirectory(pubdir, settings['pperms'], uid, gid)
+	t = Template()
+	try:
+		tplDir = os.path.join(settings['templates'], templateName)
+		dirsFile = os.path.join(tplDir, templateName + '.dirs')
+		inFile  = open(dirsFile, 'r')
+		source = inFile.read()
+		
+		# Substitute any variables
+		expression = '\[\%.+\%\]'
+		while re.search(expression, source) != None:
+			source = t.processString(source, values)
+		
+		# Go through each substituted line
+		lines = source.split('\n')
+		for line in lines:
+			if len(line) > 0 and not line.strip().startswith('#'):
+				# Split the line up into its pieces
+				l = line.split()
+				
+				directory = l[0]
+				user = pwd.getpwnam(l[1])[0]
+				group = grp.getgrnam(l[2])[0]
+				mode = l[3]
+				uid = pwd.getpwnam(l[1])[2]
+				gid = grp.getgrnam(l[2])[2]
+				
+				# Create the directory
+				if os.path.exists(directory):
+					print('warning: ' + directory + ' exists')
+				else:
+					os.mkdir(directory, int(mode, 8))
+				
+				# chown and chmod it
+				os.chown(directory, uid, gid)
+				subprocess.call('chmod ' + mode + ' ' + directory, shell=True)
+	except TemplateException, e:
+		print "ERROR: %s" % e
 
-def makeDirectory(directory, mode='750', uid=-1, gid=-1):
-	"""Makes a directory and sets its mode and owner"""
-	
-	# Does it already exist?
-	if os.path.exists(directory):
-		print('warning: ' + directory + ' exists')
-	else:
-		os.mkdir(directory, int(mode, 8))
-	
-	# chown the directory
-	os.chown(directory, uid, gid)
-	
-	# Change the mode agaon; the mkdir() call isn't setting it properly for 2750, even though '2750'
-	# and '02750' both give the same octal value of 1512
-	subprocess.call('chmod ' + mode + ' ' + directory, shell=True)
 
 if __name__ == '__main__':
-	parser = OptionParser(usage="%prog -d 'domain.ext'", version="%prog 0.0.1")
-	parser.add_option('-d', '--domain', action='store', type='string', dest='domain', help='the domain to create')
-	parser.add_option('-c', '--conf',   action='store', type='string', dest='config', default='/etc/mksite.conf', help='path to the configuration file')
-	parser.add_option('-v', '--vhost',  action='store', type='string', dest='vhost',  help='folder for vhost configs')
-	parser.add_option('-u', '--user',   action='store', type='string', dest='user',   help='username to own the folders')
-	parser.add_option('-g', '--group',  action='store', type='string', dest='group',  help='group to own the folders')
-	parser.add_option('-r', '--root',   action='store', type='string', dest='root',   help='root folder to create the site structure under')
+	parser = OptionParser(usage="mksite [-c config] [-t templatename] [-d 'domain.ext']", version=MKSITE['name'] + ' ' + MKSITE['version'])
+	parser.add_option('-d', '--domain',   action='store', type='string', dest='domain',   help='the domain to create')
+	parser.add_option('-t', '--template', action='store', type='string', dest='template', help='name of the template to use')
+	parser.add_option('-c', '--conf',     action='store', type='string', dest='config',   help='path to the configuration file', default='/etc/mksite/mksite.conf')
 	(options, args) = parser.parse_args()
-	
-	# Make sure we got a domain
-	if options.domain is None:
-		parser.error('domain name is required')
 	
 	# Parse the configuration
 	config = parseConfig(options.config)
 	
-	# Override any defaults/config file values with arguments passed in
-	if not options.user is None:
-		config['user'] = options.user
-	if not options.group is None:
-		config['group'] = options.group
-	if not options.root is None:
-		config['siteroot'] = options.root
-	if not options.vhost is None:
-		config['confdir'] = options.vhost
+	# If they didn't specify a template or it doesn't exist, have them choose
+	template = ''
+	if options.template is not None:
+		template = options.template
+	else:
+		templates = []
+		templatesDir = config['templates']
+		
+		# Get the list of all templates
+		for template in os.listdir(templatesDir):
+			templateDir = os.path.join(templatesDir, template)
+			
+			if os.path.isdir(templateDir):
+				if os.path.exists(os.path.join(templateDir, template + '.conf')):
+					templates.append(template)
+		
+		default = 1
+		for i in xrange(len(templates)):
+			# Fitting in with the excellent naming for i, j will be the
+			# index presented to the user (1 to templateCount, instead
+			# of 0 to templateCount-1)
+			j = i + 1
+			
+			# Did we find the default?
+			if templates[i] == config['defaulttemplate']:
+				default = j
+			
+			# Open the template configuration and get the name
+			tplDir = os.path.join(config['templates'], templates[i])
+			tplConfig = ConfigParser.ConfigParser()
+			tplConfig.read(os.path.join(tplDir, templates[i] + '.conf'))
+			templateName = tplConfig.get('template', 'name')
+			
+			print str(j) + '. ' + templateName
+		
+		print ''
+		templateNumber = -1
+		while templateNumber < 0 or templateNumber > len(templates):
+			choice = raw_input('Choose a template [' + str(default) + ']: ')
+			if len(choice) == 0:
+				choice = str(default)
+			templateNumber = int(choice)
+		
+		template = templates[templateNumber - 1]
 	
 	# Create the site
-	writeVhost(config, options.domain)
-	makeDirectories(config, options.domain)
+	values = getTemplateValues(config, options.domain, template)
+	writeVhost(config, values['domain'], template, values)
+	makeDirectories(config, values['domain'], template, values)
 	print 'Done.'

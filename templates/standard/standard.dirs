@@ -1,0 +1,7 @@
+# Directory            Owning User       Owning Group       Mode
+# -----------------    ----------------  -----------------  ----
+[% root %]             [% mksiteuser %]  [% mksitegroup %]   755
+[% root %]/cgi-bin     [% mksiteuser %]  [% mksitegroup %]   755
+[% root %]/logs        [% mksiteuser %]  [% mksitegroup %]   777
+[% root %]/private     [% mksiteuser %]  [% mksitegroup %]   700
+[% root %]/public      [% mksiteuser %]  [% mksitegroup %]  2750
