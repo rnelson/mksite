@@ -2,7 +2,7 @@
 #
 # mksite v0.0.2
 # Copyright (C) 2010 Ross Nelson
-# http://github.com/rnelson/slicehost-mksite
+# http://github.com/rnelson/mksite
 
 from datetime import datetime
 from optparse import OptionParser

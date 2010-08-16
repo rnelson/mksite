@@ -181,4 +181,4 @@ runs (overwriting any user-specified values for them):
 
 
 [1]: http://template-toolkit.org/python/index.html
-[2]: http://github.com/rnelson/slicehost-mksite/tree/master/templates
+[2]: http://github.com/rnelson/mksite/tree/master/templates/
