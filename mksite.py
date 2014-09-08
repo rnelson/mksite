@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
-# mksite v0.0.2
-# Copyright (C) 2010 Ross Nelson
+# mksite v0.0.3
+# Copyright (C) 2010-2014 Ross Nelson
 # http://github.com/rnelson/mksite
 
 from datetime import datetime
@@ -18,10 +18,10 @@ import subprocess
 
 MKSITE = {
 	'name' : 'mksite',
-	'version' : '0.0.2',
+	'version' : '0.0.3',
 	'author' : 'Ross Nelson',
-	'url' : 'http://github.com/rnelson/slicehost-mksite',
-	'copyright' : 'Copyright (C) 2010 Ross Nelson'
+	'url' : 'http://github.com/rnelson/mksite',
+	'copyright' : 'Copyright (C) 2010-2014 Ross Nelson'
 }
 
 DEFAULTCONF = {
