@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # mksite v0.0.3
-# Copyright (C) 2010-2014 Ross Nelson
+# Copyright (C) 2014 Ross Nelson
 # http://github.com/rnelson/mksite
 
 from datetime import datetime
@@ -21,7 +21,7 @@ MKSITE = {
 	'version' : '0.0.3',
 	'author' : 'Ross Nelson',
 	'url' : 'http://github.com/rnelson/mksite',
-	'copyright' : 'Copyright (C) 2010-2014 Ross Nelson'
+	'copyright' : 'Copyright (C) 2014 Ross Nelson'
 }
 
 DEFAULTCONF = {
